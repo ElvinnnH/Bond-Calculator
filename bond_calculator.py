@@ -8,61 +8,63 @@ import altair as alt  # Added for charting
 from dateutil.relativedelta import relativedelta  # For coupon schedule
 from pathlib import Path  # NEW
 
-# Local Excel loading (absolute path + detailed error)
 EXCEL_FILE = "Corporate Bonds.xlsx"
-excel_path = Path(__file__).parent / EXCEL_FILE
-bonds_df = None
-try:
-    if not excel_path.exists():
-        st.sidebar.error(f"Excel file not found at: {excel_path}")
-    else:
-        xls = pd.ExcelFile(excel_path)
-        # Find 'watchlist' sheet case-insensitive (trim spaces) / partial match
+
+@st.cache_data(show_spinner=False)
+def load_bonds(excel_file: str):
+    path = Path(__file__).parent / excel_file
+    if not path.exists():
+        return None, f"Excel file not found at: {path}"
+    try:
+        xls = pd.ExcelFile(path)
         target_sheet = None
         for s in xls.sheet_names:
             if s.strip().lower() == "watchlist" or "watchlist" in s.strip().lower():
                 target_sheet = s
                 break
         if target_sheet is None:
-            st.sidebar.error("Sheet 'watchlist' not found. Sheets: " + ", ".join(xls.sheet_names))
-        else:
-            raw_df = xls.parse(target_sheet)
-            raw_df.columns = [c.strip() for c in raw_df.columns]
-            lower_map = {c.lower(): c for c in raw_df.columns}
-            required = ["isin", "issuer", "s&p rating", "coupon", "maturity date"]
-            alt_names = {
-                "s&p rating": ["s&p", "rating", "sp rating"],
-                "maturity date": ["maturity", "maturitydate", "mat date"],
-                "coupon": ["coupon", "coupon rate", "cpn"],
-            }
-            resolved = {}
-            for key in required:
-                if key in lower_map:
-                    resolved[key] = lower_map[key]
-                else:
-                    for alt in alt_names.get(key, []):
-                        if alt in lower_map:
-                            resolved[key] = lower_map[alt]
-                            break
-            if len(resolved) != len(required):
-                missing = set(required) - set(resolved.keys())
-                st.sidebar.error("Missing columns: " + ", ".join(missing))
+            return None, "Sheet 'watchlist' not found. Sheets: " + ", ".join(xls.sheet_names)
+        raw_df = xls.parse(target_sheet)
+        raw_df.columns = [c.strip() for c in raw_df.columns]
+        lower_map = {c.lower(): c for c in raw_df.columns}
+        required = ["isin", "issuer", "s&p rating", "coupon", "maturity date"]
+        alt_names = {
+            "s&p rating": ["s&p", "rating", "sp rating"],
+            "maturity date": ["maturity", "maturitydate", "mat date"],
+            "coupon": ["coupon", "coupon rate", "cpn"],
+        }
+        resolved = {}
+        for key in required:
+            if key in lower_map:
+                resolved[key] = lower_map[key]
             else:
-                bonds_df = raw_df[[resolved[k] for k in required]].copy()
-                bonds_df.columns = ["ISIN","Issuer","S&P Rating","Coupon","Maturity Date"]
-                def _parse_coupon(x):
-                    if pd.isna(x): return None
-                    if isinstance(x,(int,float)): return float(x)
-                    s=str(x).strip()
-                    if s.endswith('%'): s=s[:-1]
-                    s=s.replace(',','')
-                    try: return float(s)
-                    except: return None
-                bonds_df['Coupon']=bonds_df['Coupon'].apply(_parse_coupon)
-                bonds_df['CouponDisplayPct']=bonds_df['Coupon'].apply(lambda v: v*100 if v is not None and v<=1 else v)
-                bonds_df['Maturity Date']=pd.to_datetime(bonds_df['Maturity Date'], errors='coerce').dt.date
-except Exception as e:
-    st.sidebar.error(f"Excel load failed: {e}\nPath tried: {excel_path}")
+                for alt in alt_names.get(key, []):
+                    if alt in lower_map:
+                        resolved[key] = lower_map[alt]
+                        break
+        if len(resolved) != len(required):
+            missing = set(required) - set(resolved.keys())
+            return None, "Missing columns: " + ", ".join(missing)
+        bonds_df = raw_df[[resolved[k] for k in required]].copy()
+        bonds_df.columns = ["ISIN","Issuer","S&P Rating","Coupon","Maturity Date"]
+        def _parse_coupon(x):
+            if pd.isna(x): return None
+            if isinstance(x,(int,float)): return float(x)
+            s=str(x).strip()
+            if s.endswith('%'): s=s[:-1]
+            s=s.replace(',','')
+            try: return float(s)
+            except: return None
+        bonds_df['Coupon']=bonds_df['Coupon'].apply(_parse_coupon)
+        bonds_df['CouponDisplayPct']=bonds_df['Coupon'].apply(lambda v: v*100 if v is not None and v<=1 else v)
+        bonds_df['Maturity Date']=pd.to_datetime(bonds_df['Maturity Date'], errors='coerce').dt.date
+        return bonds_df, None
+    except Exception as e:
+        return None, f"Excel load failed: {e}\nPath tried: {path}"
+
+bonds_df, bonds_error = load_bonds(EXCEL_FILE)
+if bonds_error:
+    st.sidebar.error(bonds_error)
 
 # Set page config
 st.set_page_config(
